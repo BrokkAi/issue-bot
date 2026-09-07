@@ -38,12 +38,17 @@ def npm_exists(package):
 
 
 def wait_visible(check):
-    for attempt in range(30):
+    # npm can accept a signed publication before its processing queue exposes
+    # the immutable version. Allow that queue to finish before treating it as
+    # a failure; never re-upload just because public reads lag behind.
+    for attempt in range(61):
         if check():
             return
-        if attempt < 29:
-            time.sleep(2)
-    raise ValueError("published package did not become visible within 60 seconds; retry verification")
+        if attempt < 60:
+            if attempt % 6 == 0:
+                print("Publication accepted; waiting for registry visibility...", flush=True)
+            time.sleep(10)
+    raise ValueError("published package did not become visible within 10 minutes; retry verification")
 
 
 def run(command, directory):
@@ -74,12 +79,18 @@ def run(command, directory):
             raise ValueError("publication is incomplete: an npm package is missing")
         print("All five npm packages match the staged bytes")
         return
-    for package in packages:
-        if not existing[package["name"]]:
-            subprocess.run(["npm", "publish", str((directory / "npm" / package["filename"]).resolve()),
-                            "--access", "public", "--registry", "https://registry.npmjs.org",
-                            "--tag", "next" if "-" in npm_version else "latest"], check=True)
-        wait_visible(lambda: npm_exists(package))
+    # Submit independent platform packages together so their processing queues
+    # overlap. The root launcher must wait until every dependency is verified.
+    groups = ([p for p in packages if p["name"] != package_installers.NPM_ROOT],
+              [p for p in packages if p["name"] == package_installers.NPM_ROOT])
+    for group in groups:
+        for package in group:
+            if not existing[package["name"]]:
+                subprocess.run(["npm", "publish", str((directory / "npm" / package["filename"]).resolve()),
+                                "--access", "public", "--registry", "https://registry.npmjs.org",
+                                "--tag", "next" if "-" in npm_version else "latest"], check=True)
+        for package in group:
+            wait_visible(lambda: npm_exists(package))
     print("Published and verified npm packages")
 
 
