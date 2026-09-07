@@ -17,7 +17,8 @@ Commit the completed fix locally. Do not push, create/comment on PRs or issues, 
 publish releases or alter credentials; the bot creates the PR after your work passes verification.
 Do not modify CI merely to hide failures. Never claim a check passed unless you ran it successfully.
 If requirements are ambiguous, the issue is already fixed, needs unavailable credentials or is too
-large to solve reliably, return blocked with a specific explanation. Do not invent a fix.
+large to solve reliably, return blocked with a specific explanation. That explanation will be posted
+on the issue: do not include credentials, private diagnostics or machine-specific paths. Do not invent a fix.
 Your last line must be one JSON object prefixed ISSUE_RESULT, using one of these formats:
 ISSUE_RESULT {"status":"solved","title":"Concise PR title","detail":"What changed and why, with limitations","tests":["command: successful result"]}
 ISSUE_RESULT {"status":"blocked","detail":"Specific reason and what is needed"}

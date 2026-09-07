@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestCLIOverridesAndInterspersedFlags(t *testing.T) {
@@ -23,12 +24,12 @@ func TestCLIOverridesAndInterspersedFlags(t *testing.T) {
 	called := false
 	run := func(_ context.Context, c bot.Config, _ *slog.Logger, once bool) error {
 		called = true
-		if !once || c.Issue != 7 || c.Draft || c.Agent.Model != "fixture" || c.Agent.Effort != "low" || len(c.Labels) != 2 {
+		if c.ClaimTimeout != bot.Duration(2*time.Minute) || !once || c.Issue != 7 || c.Draft || c.Agent.Model != "fixture" || c.Agent.Effort != "low" || len(c.Labels) != 2 {
 			t.Fatalf("wrong settings %+v", c)
 		}
 		return nil
 	}
-	err := executeWithRun(context.Background(), []string{"once", "--config", path, "--issue", "7", "--draft=false", "--model", "fixture", "--effort", "low", "--label", "bug", "--label", "ready"}, slog.New(slog.NewTextHandler(io.Discard, nil)), run)
+	err := executeWithRun(context.Background(), []string{"once", "--config", path, "--issue", "7", "--claim-timeout", "2m", "--draft=false", "--model", "fixture", "--effort", "low", "--label", "bug", "--label", "ready"}, slog.New(slog.NewTextHandler(io.Discard, nil)), run)
 	if err != nil || !called {
 		t.Fatalf("CLI %v %v", called, err)
 	}

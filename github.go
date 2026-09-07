@@ -45,6 +45,8 @@ type PullRequest struct {
 	} `json:"base"`
 }
 type issueSource interface {
+	commentSource
+	linkedPull(context.Context, int) (*LinkedPull, error)
 	issues(context.Context) ([]Issue, error)
 	issue(context.Context, int) (Issue, error)
 	pull(context.Context, *Job) (*PullRequest, error)

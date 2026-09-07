@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -43,12 +44,18 @@ func writeTestFile(t *testing.T, path, content string) {
 }
 
 type fakeSource struct {
-	items      []Issue
-	prs        map[int]*PullRequest
-	creates    int
-	failCreate bool
-	cfg        Config
-	root       string
+	mu          sync.Mutex
+	notes       map[int][]issueComment
+	links       map[int]*LinkedPull
+	nextComment int64
+	failEdit    bool
+	failPost    bool
+	items       []Issue
+	prs         map[int]*PullRequest
+	creates     int
+	failCreate  bool
+	cfg         Config
+	root        string
 }
 
 func (f *fakeSource) issues(context.Context) ([]Issue, error) { return f.items, nil }
@@ -117,8 +124,8 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatal(err)
 	}
 	f := &fixture{t: t, s: &State{Format: 1, Remote: cfg.Remote, Branch: cfg.Branch, Directory: cfg.Directory, Repo: cfg.GitHubRepo(), Host: cfg.GitHub.Host, Jobs: map[int]*Job{}}}
-	f.source = &fakeSource{cfg: cfg, items: []Issue{{Number: 1, Title: "First", State: "open"}, {Number: 2, Title: "Second", State: "open"}}, prs: map[int]*PullRequest{}}
-	f.e = engine{config: cfg, source: f.source, log: slog.New(slog.NewTextHandler(io.Discard, nil)), now: func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }}
+	f.source = &fakeSource{cfg: cfg, items: []Issue{{Number: 1, Title: "First", State: "open"}, {Number: 2, Title: "Second", State: "open"}}, prs: map[int]*PullRequest{}, notes: map[int][]issueComment{}, links: map[int]*LinkedPull{}}
+	f.e = engine{config: cfg, source: f.source, log: slog.New(slog.NewTextHandler(io.Discard, nil)), wait: func(context.Context, time.Duration) error { return nil }, now: func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }}
 	f.e.agent = func(c Config) Agent {
 		return scriptedAgent(func(ctx context.Context, p string) (Result, error) {
 			f.calls++
@@ -255,4 +262,43 @@ func TestLocksAndStateIdentity(t *testing.T) {
 	if _, err := ReadState(cfg); err == nil {
 		t.Fatal("state accepted for another repository")
 	}
+}
+
+func (f *fakeSource) linkedPull(_ context.Context, n int) (*LinkedPull, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.links[n], nil
+}
+func (f *fakeSource) comments(_ context.Context, n int) ([]issueComment, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]issueComment(nil), f.notes[n]...), nil
+}
+func (f *fakeSource) postComment(_ context.Context, n int, body string) (issueComment, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nextComment++
+	c := issueComment{ID: f.nextComment, Body: body}
+	f.notes[n] = append(f.notes[n], c)
+	if f.failPost {
+		return issueComment{}, errors.New("lost comment response")
+	}
+	return c, nil
+}
+func (f *fakeSource) editComment(_ context.Context, id int64, body string) (issueComment, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failEdit {
+		return issueComment{}, errors.New("comment edit unavailable")
+	}
+	for n, notes := range f.notes {
+		for i, c := range notes {
+			if c.ID == id {
+				c.Body = body
+				f.notes[n][i] = c
+				return c, nil
+			}
+		}
+	}
+	return issueComment{}, errors.New("comment not found")
 }

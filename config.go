@@ -45,6 +45,7 @@ type Config struct {
 	GitHub           GitHubConfig `json:"github"`
 	Poll             Duration     `json:"poll"`
 	Timeout          Duration     `json:"timeout"`
+	ClaimTimeout     Duration     `json:"claim_timeout"`
 	RetryDelay       Duration     `json:"retry_delay"`
 	Attempts         int          `json:"attempts"`
 	Labels           []string     `json:"labels,omitempty"`
@@ -58,8 +59,8 @@ func DefaultConfig() Config {
 	return Config{Branch: "master", Directory: "var/checkout", StateDirectory: "var/state",
 		InstructionFiles: []string{"AGENTS.md", "CONTRIBUTING.md", "README.md"},
 		Agent:            AgentConfig{Command: []string{"codex-acp"}}, GitHub: GitHubConfig{Host: "github.com"},
-		Poll: Duration(5 * time.Minute), Timeout: Duration(2 * time.Hour), RetryDelay: Duration(15 * time.Minute), Attempts: 3,
-		ExcludeLabels: []string{"wontfix", "duplicate", "invalid"}, Draft: true}
+		Poll: Duration(5 * time.Minute), Timeout: Duration(2 * time.Hour), ClaimTimeout: Duration(15 * time.Minute), RetryDelay: Duration(15 * time.Minute), Attempts: 3,
+		Draft: true}
 }
 func ReadConfig(filename string) (Config, error) {
 	cfg := DefaultConfig()
@@ -186,6 +187,9 @@ func (c Config) Validate() error {
 		if !filepath.IsLocal(name) {
 			return fmt.Errorf("instruction file must be relative: %s", name)
 		}
+	}
+	if c.ClaimTimeout < Duration(30*time.Second) {
+		return errors.New("claim_timeout must be at least 30s")
 	}
 	if c.Poll <= 0 || c.Timeout <= 0 || c.RetryDelay <= 0 || c.Attempts < 1 || c.Issue < 0 {
 		return errors.New("durations and attempts must be positive; issue cannot be negative")

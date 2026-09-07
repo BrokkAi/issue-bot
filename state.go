@@ -17,15 +17,17 @@ type Result struct {
 	Tests  []string `json:"tests,omitempty"`
 }
 type Job struct {
-	Issue   Issue     `json:"issue"`
-	Branch  string    `json:"branch"`
-	Base    string    `json:"base,omitempty"`
-	Tries   int       `json:"tries"`
-	RetryAt time.Time `json:"retry_at,omitempty"`
-	Failure string    `json:"failure,omitempty"`
-	Status  string    `json:"status"`
-	URL     string    `json:"url,omitempty"`
-	Result  *Result   `json:"result,omitempty"`
+	ClaimPending bool      `json:"claim_pending,omitempty"`
+	Claim        *Claim    `json:"claim,omitempty"`
+	Issue        Issue     `json:"issue"`
+	Branch       string    `json:"branch"`
+	Base         string    `json:"base,omitempty"`
+	Tries        int       `json:"tries"`
+	RetryAt      time.Time `json:"retry_at,omitempty"`
+	Failure      string    `json:"failure,omitempty"`
+	Status       string    `json:"status"`
+	URL          string    `json:"url,omitempty"`
+	Result       *Result   `json:"result,omitempty"`
 }
 type State struct {
 	Format    int          `json:"format"`

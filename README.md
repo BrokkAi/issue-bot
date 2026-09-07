@@ -32,7 +32,7 @@ No configuration file is needed. The bot discovers `origin` (or the only remote)
 and the repository's default branch. It creates a managed clone and a separate
 Git worktree for each issue. Your source checkout and uncommitted edits are left
 alone. Starting it authorizes unattended edits, command execution, commits,
-branch pushes and PR creation for the configured repository.
+branch pushes, claim/status comments and PR creation for the configured repository.
 
 ```sh
 bib /path/to/repo
@@ -41,6 +41,7 @@ bib --label bug --label ready
 bib once --issue 123
 bib --model YOUR_MODEL_ID --effort low
 bib --agent your-acp-agent --agent-arg=--stdio
+bib --claim-timeout 15m
 bib --draft=false
 bib status
 bib retry --issue 123 --once
@@ -54,22 +55,28 @@ attempt budgets and resumes work; `--issue` restricts it to that issue. Run
 
 ## How it works
 
-1. List open issues, oldest first, with pagination. PRs and locked issues are
-   excluded. Labels `wontfix`, `duplicate` and `invalid` are excluded by default;
-   repeated `--label` flags require all those labels. `--issue` still respects
-   eligibility and label filters.
-2. Create a persistent `issue-bot/<base-branch-hash>/<issue-number>` branch and
-   worktree from the selected remote base branch. The agent reads repository
-   instructions, examines the issue and discussion, reproduces the problem,
-   implements a focused fix, runs checks, and commits locally.
-3. Require a structured completion receipt containing the change explanation
-   and validation evidence. Independently check that the worktree is clean, the
-   branch is correct, it contains its starting commit, and it has a real diff.
-   An optional operator `verify` command must also pass.
-4. Recheck issue eligibility, push the issue branch without force, then create
-   a draft PR with the explanation, check results and `Fixes #N`. Confirm its
-   repository, branches, issue marker and head commit. `--draft=false` creates
-   a regular PR. The bot does not merge PRs or close issues itself.
+1. Walk all open, unlocked issues, oldest first, with pagination. No label
+   filter is required. Optional repeated `--label` flags require all labels;
+   `exclude_labels` can opt out particular labels.
+2. Skip issues that already have a linked or cross-referenced PR, including PRs
+   created by people or other bots, on other branches or forks. Open, draft,
+   merged and closed PRs all count. GitHub's issue links and timeline are checked;
+   a PR with no reference to the issue cannot be associated automatically.
+3. Post an **“I'm starting work on this issue”** comment with a unique claim and
+   expiry time. Other instances skip issues with an active claim and continue
+   walking the queue. Recheck competing claims before launching the agent.
+4. Create a persistent `issue-bot/<base-branch-hash>/<issue-number>` branch and
+   isolated worktree. The agent reads repository instructions, inspects the issue
+   and discussion, implements a focused fix, runs checks, and commits locally.
+5. Require a completion receipt with the explanation and validation evidence.
+   Independently check the branch, clean worktree, starting commit and real diff.
+   An optional operator `verify` command must also pass. Recheck claim ownership
+   and existing PRs before pushing and again before creating the PR.
+6. Push without force and create a draft PR with the explanation, check results
+   and `Fixes #N`. Confirm its repository, branches, issue marker and head commit.
+   Update the starting comment to **“Done — pull request: URL”**, then continue
+   to the next available issue. `--draft=false` creates regular PRs. The bot
+   does not merge PRs or close issues itself.
 
 A PR is recorded as **submitted**, not as proof that the issue is solved. Agent
 validation evidence is a report; the bot does not infer test correctness from
@@ -77,8 +84,9 @@ prose or wait for remote CI. Use repository branch protections and review, and
 configure `verify` when you need an independent local gate.
 
 Ambiguous, already-fixed, unsupported or oversized issues can be marked blocked
-with a local explanation. They do not prevent attempts on later issues. The bot
-posts no issue comments. Transient work failures retry after 15 minutes, up to
+with an explanation on the issue. They do not prevent attempts on later issues.
+Failed or interrupted attempts mark the claim released; detailed diagnostics stay
+in local logs. Transient work failures retry after 15 minutes, up to
 three attempts; exhausted jobs require `retry`. Failed work and the previous
 failure are preserved. Agent setup failures (login, executable, model or effort)
 stop the daemon without consuming an issue attempt.
@@ -90,10 +98,35 @@ at the attempt limit or after the issue closes. A lost PR-creation response is
 reconciled by the persistent branch and issue marker. A closed, unmerged bot PR
 blocks the job for inspection. Work is not automatically deleted or reset.
 
-This is a single-daemon workflow. Local state/checkout locks prevent concurrent
-local runs; there is no distributed claim across machines. Keep one instance per
-repository/base branch. Existing human PRs on other branches are left for the
-agent to discover while inspecting the issue; the bot deduplicates its own PRs.
+## Coordination between instances
+
+The claim timeout defaults to **15 minutes**, configurable with
+`--claim-timeout 30m` or `"claim_timeout": "30m"` (minimum 30 seconds).
+While working, the bot renews the same comment every third of that duration.
+The per-attempt `timeout` is separate and still defaults to two hours. A crashed
+instance stops renewing; another instance can take over after its claim expires.
+A renewal error cancels the active agent, and publication requires a fresh
+ownership check. Keep participating machines' clocks synchronized.
+
+Claims cover the repository and issue number across base branches and machines.
+Each installation keeps its own managed workspace; local locks still protect
+against two processes sharing the same checkout/state. Simultaneous claimants
+wait two seconds after posting and elect the lowest active GitHub comment ID;
+losers release their comment and move on. GitHub comments provide **advisory
+coordination, not an atomic distributed lock**: delayed visibility can briefly
+allow duplicate local effort. Rechecking ownership and PR links before publication
+reduces duplicate PRs, but GitHub offers no atomic comment-claim/PR transaction.
+All participating instances need this version's claim protocol; older versions
+do not honor it.
+
+Starting comments and completion updates are idempotent across retries: the
+random token is saved before the initial POST, and a failed completion update
+is retried without running the agent or creating a PR again. The same comment
+is updated throughout the attempt so heartbeats do not produce comment spam.
+If an attempt cannot continue, its comment is marked released. An uneditable or
+deleted comment stops renewal; a previously saved completion can be posted again
+if its comment was deleted. Issues/PR read access, issue-comment write access,
+and the existing push/PR-creation rights are required.
 
 ## Optional configuration
 
@@ -111,6 +144,7 @@ loaded or generated config. Paths are relative to that file. See
   "exclude_labels": ["wontfix", "duplicate", "invalid"],
   "draft": true,
   "poll": "5m",
+  "claim_timeout": "15m",
   "timeout": "2h",
   "retry_delay": "15m",
   "attempts": 3,
@@ -151,7 +185,9 @@ make check build
 ```
 
 Tests use temporary Git remotes and simulated GitHub responses. They cover
-walking multiple issues, PR reconciliation after a lost response, blocked-job
+walking multiple issues, existing human/fork PR detection, competing claims,
+claim expiry and renewal failure, idempotent starting/completion comments,
+PR reconciliation after a lost response, blocked-job
 fairness, retries preserving edits, setup failures, independent verification,
 configuration, discovery and locks. They do not run a paid agent or create PRs
 in live repositories. The shared ACP library and release-bot additionally test

@@ -61,6 +61,7 @@ func executeWithRun(ctx context.Context, args []string, log *slog.Logger, run ru
 	defaults := bot.DefaultConfig()
 	poll := fs.Duration("poll", 0, "poll interval, e.g. 5m")
 	timeout := fs.Duration("timeout", 0, "budget for each attempt, e.g. 2h")
+	claimTimeout := fs.Duration("claim-timeout", 0, "claim expiry without renewal, e.g. 15m")
 	attempts := fs.Int("attempts", defaults.Attempts, "maximum attempts per issue")
 	var labels, agentArgs []string
 	fs.Func("label", "required label; repeat to require all labels", func(s string) error { labels = append(labels, s); return nil })
@@ -113,6 +114,8 @@ func executeWithRun(ctx context.Context, args []string, log *slog.Logger, run ru
 			cfg.Poll = bot.Duration(*poll)
 		case "timeout":
 			cfg.Timeout = bot.Duration(*timeout)
+		case "claim-timeout":
+			cfg.ClaimTimeout = bot.Duration(*claimTimeout)
 		case "attempts":
 			cfg.Attempts = *attempts
 		}

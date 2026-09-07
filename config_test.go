@@ -8,7 +8,7 @@ import (
 
 func TestConfigPathsAndStrictJSON(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bot.json")
-	for _, raw := range []string{`{"remote":"https://github.com/o/r.git","unknown":true}`, `{"remote":"https://github.com/o/r.git"} {}`, `{"remote":"https://github.com/o/r.git","poll":"0s"}`, `{"remote":"https://github.com/o/r.git","directory":"x","state_directory":"x/sub"}`} {
+	for _, raw := range []string{`{"remote":"https://github.com/o/r.git","unknown":true}`, `{"remote":"https://github.com/o/r.git"} {}`, `{"remote":"https://github.com/o/r.git","poll":"0s"}`, `{"remote":"https://github.com/o/r.git","claim_timeout":"10s"}`, `{"remote":"https://github.com/o/r.git","directory":"x","state_directory":"x/sub"}`} {
 		writeTestFile(t, path, raw)
 		if _, err := ReadConfig(path); err == nil {
 			t.Fatalf("accepted %s", raw)
@@ -32,6 +32,7 @@ func TestConfigPathsAndStrictJSON(t *testing.T) {
 }
 func TestEligibilityAndReceipts(t *testing.T) {
 	cfg := DefaultConfig()
+	cfg.ExcludeLabels = []string{"wontfix"}
 	i := Issue{Number: 1, State: "open"}
 	if !eligible(cfg, i) {
 		t.Fatal("open issue not eligible")

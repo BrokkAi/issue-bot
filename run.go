@@ -17,6 +17,8 @@ type engine struct {
 	log    *slog.Logger
 	agent  func(Config) Agent
 	now    func() time.Time
+	wait   func(context.Context, time.Duration) error
+	lease  *lease
 }
 
 func Run(ctx context.Context, cfg Config, log *slog.Logger, once bool) error {
@@ -45,7 +47,15 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, once bool) error {
 	for {
 		worked, err := e.step(ctx, state)
 		if err != nil {
-			return err
+			var setup *runner.SetupError
+			if once || errors.As(err, &setup) || ctx.Err() != nil {
+				return err
+			}
+			log.Error("Issue scan failed; will retry", "error", err)
+			if err := pause(ctx, time.Duration(cfg.Poll)); err != nil {
+				return err
+			}
+			continue
 		}
 		if once {
 			return nil
@@ -64,77 +74,218 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, once bool) error {
 	}
 }
 func (e engine) save(s *State) error { return writeState(e.config, s) }
+func (e engine) manager() claimManager {
+	return claimManager{source: e.source, config: e.config, now: e.now, wait: e.wait}
+}
+func (e engine) syncClaim(ctx context.Context, s *State, j *Job) error {
+	if !j.ClaimPending || j.Claim == nil {
+		return nil
+	}
+	if err := e.manager().sync(ctx, j.Claim); err != nil {
+		return err
+	}
+	j.ClaimPending = false
+	return e.save(s)
+}
+func (e engine) complete(ctx context.Context, s *State, j *Job, p *PullRequest) error {
+	e.recordPull(j, p)
+	if j.Claim == nil {
+		j.Claim = newClaim(e.config, j.Issue.Number, e.now())
+	}
+	j.Claim.Status = "done"
+	j.Claim.URL = p.URL
+	j.Claim.Detail = ""
+	j.ClaimPending = true
+	if err := e.save(s); err != nil {
+		return err
+	}
+	return e.syncClaim(ctx, s, j)
+}
 func (e engine) step(ctx context.Context, s *State) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
+	}
+	// Deliver saved completion/release updates even if the issue was closed or
+	// is no longer returned by the issue query. Never rerun an agent to do this.
+	numbers := make([]int, 0, len(s.Jobs))
+	for n := range s.Jobs {
+		numbers = append(numbers, n)
+	}
+	sort.Ints(numbers)
+	for _, n := range numbers {
+		if e.config.Issue != 0 && n != e.config.Issue {
+			continue
+		}
+		j := s.Jobs[n]
+		if j.ClaimPending && j.Claim != nil && j.Claim.Status != "working" {
+			if err := e.syncClaim(ctx, s, j); err != nil {
+				e.log.Error("Status comment update failed; retaining it for retry", "issue", n, "error", err)
+			}
+		}
+		if j.Status == "pending" && j.Tries > 0 {
+			pr, err := e.source.pull(ctx, j)
+			if err != nil {
+				return false, err
+			}
+			if pr != nil {
+				if err := e.complete(ctx, s, j, pr); err != nil {
+					return false, err
+				}
+			}
+		}
 	}
 	issues, err := e.source.issues(ctx)
 	if err != nil {
 		return false, err
 	}
 	sort.Slice(issues, func(i, j int) bool { return issues[i].Number < issues[j].Number })
-	// Reconcile interrupted/pending work even when an issue was closed or unlabelled.
-	numbers := make([]int, 0, len(s.Jobs))
-	for n, j := range s.Jobs {
-		if j.Status == "pending" && (e.config.Issue == 0 || e.config.Issue == n) {
-			numbers = append(numbers, n)
-		}
-	}
-	sort.Ints(numbers)
-	for _, n := range numbers {
-		j := s.Jobs[n]
-		pr, err := e.source.pull(ctx, j)
-		if err != nil {
-			return false, err
-		}
-		if pr != nil {
-			e.recordPull(j, pr)
-			if err := e.save(s); err != nil {
-				return false, err
-			}
-		}
-	}
 	for _, i := range issues {
 		if !eligible(e.config, i) {
 			continue
 		}
 		j := s.Jobs[i.Number]
-		if j != nil && (j.Status != "pending" || j.RetryAt.After(e.now())) {
+		if j != nil && (j.Status != "pending" || j.ClaimPending || j.RetryAt.After(e.now())) {
 			continue
 		}
 		if j == nil {
 			j = &Job{Issue: i, Branch: branchName(e.config, i.Number), Status: "pending"}
 			s.Jobs[i.Number] = j
-			if err := e.save(s); err != nil {
-				return false, err
-			}
 		}
 		pr, err := e.source.pull(ctx, j)
 		if err != nil {
 			return false, err
 		}
 		if pr != nil {
-			e.recordPull(j, pr)
-			return true, e.save(s)
+			if err := e.complete(ctx, s, j, pr); err != nil {
+				return false, err
+			}
+			continue
+		}
+		linked, err := e.source.linkedPull(ctx, i.Number)
+		if err != nil {
+			return false, err
+		}
+		if linked != nil {
+			j.Status = "has_pr"
+			j.URL = linked.URL
+			e.log.Info("Skipping issue with an existing PR", "issue", i.Number, "url", linked.URL)
+			if err := e.save(s); err != nil {
+				return false, err
+			}
+			continue
 		}
 		if j.Tries >= e.config.Attempts {
 			j.Status = "blocked"
-			return true, e.save(s)
+			if err := e.releaseClaim(ctx, s, j, "Attempt budget exhausted"); err != nil {
+				return false, err
+			}
+			continue
 		}
 		latest, err := e.source.issue(ctx, i.Number)
 		if err != nil {
 			return false, err
 		}
 		if !eligible(e.config, latest) {
-			j.Status = "skipped"
-			j.Failure = "Issue closed, locked or no longer matches filters"
-			return true, e.save(s)
+			continue
 		}
 		j.Issue = latest
-		return true, e.attempt(ctx, s, j)
+		worked, err := e.claimedAttempt(ctx, s, j)
+		if err != nil {
+			return false, err
+		}
+		if worked {
+			return true, nil
+		}
 	}
 	return false, nil
 }
+func (e engine) releaseClaim(ctx context.Context, s *State, j *Job, detail string) error {
+	if j.Claim != nil {
+		j.Claim.Status = "released"
+		j.Claim.Detail = detail
+		j.ClaimPending = true
+	}
+	if err := e.save(s); err != nil {
+		return err
+	}
+	return e.syncClaim(ctx, s, j)
+}
+func (e engine) claimedAttempt(ctx context.Context, s *State, j *Job) (bool, error) {
+	if j.Claim == nil || j.Claim.Status != "working" || !j.Claim.ExpiresAt.After(e.now()) {
+		j.Claim = newClaim(e.config, j.Issue.Number, e.now())
+	}
+	if err := e.save(s); err != nil {
+		return false, err
+	}
+	acquired, err := e.manager().acquire(ctx, j.Claim)
+	if err != nil {
+		return false, err
+	}
+	if !acquired {
+		e.log.Info("Issue claimed by another instance", "issue", j.Issue.Number)
+		j.RetryAt = e.now().Add(time.Duration(e.config.Poll))
+		return false, e.releaseClaim(ctx, s, j, "Another instance owns the active claim; yielding.")
+	}
+	if err := e.save(s); err != nil {
+		return false, err
+	}
+	workCtx, lease := e.manager().start(ctx, *j.Claim)
+	e.lease = lease
+	attemptErr := e.attempt(workCtx, s, j)
+	final := lease.close()
+	j.Claim = &final
+	if j.Status == "submitted" {
+		j.Claim.Status = "done"
+		j.Claim.URL = j.URL
+	} else {
+		j.Claim.Status = "released"
+		j.Claim.Detail = "The attempt did not produce a PR. Progress and diagnostics are saved locally for retry."
+		if j.Status == "blocked" && j.Result != nil {
+			j.Claim.Detail = j.Result.Detail
+		}
+		if attemptErr != nil {
+			j.Claim.Detail = "The attempt could not continue. The operator should check the local diagnostics."
+		}
+		if j.Status == "has_pr" {
+			j.Claim.Detail = "A pull request already exists: " + j.URL
+		}
+		if j.Claim.Detail == "" {
+			j.Claim.Detail = "The attempt ended; another instance may claim the issue."
+		}
+	}
+	j.ClaimPending = true
+	if err := e.save(s); err != nil {
+		return true, errors.Join(attemptErr, err)
+	}
+	// Release promptly on cancellation, with its own short cleanup budget.
+	finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	return true, errors.Join(attemptErr, e.syncClaim(finishCtx, s, j))
+}
+func (e engine) readyToPublish(ctx context.Context, j *Job) error {
+	if err := ctx.Err(); err != nil {
+		return context.Cause(ctx)
+	}
+	if e.lease == nil {
+		return errors.New("cannot publish without an issue claim")
+	}
+	if err := e.lease.refresh(ctx, false); err != nil {
+		return err
+	}
+	linked, err := e.source.linkedPull(ctx, j.Issue.Number)
+	if err != nil {
+		return err
+	}
+	if linked != nil {
+		j.Status = "has_pr"
+		j.URL = linked.URL
+		return errExistingPR
+	}
+	return nil
+}
+
+var errExistingPR = errors.New("another pull request already references the issue")
+
 func (e engine) recordPull(j *Job, p *PullRequest) {
 	j.URL = p.URL
 	j.RetryAt = time.Time{}
@@ -186,6 +337,9 @@ func (e engine) attempt(ctx context.Context, s *State, j *Job) error {
 			}
 			return err
 		}
+		if cause := context.Cause(ctx); cause != nil {
+			err = cause
+		}
 		return e.failed(s, j, err)
 	}
 	j.Result = &result
@@ -211,6 +365,12 @@ func (e engine) attempt(ctx context.Context, s *State, j *Job) error {
 		j.Failure = "Issue is no longer eligible; local work retained"
 		return e.save(s)
 	}
+	if err := e.readyToPublish(ctx, j); err != nil {
+		if errors.Is(err, errExistingPR) {
+			return e.save(s)
+		}
+		return e.failed(s, j, err)
+	}
 	if err := work.push(ctx, j); err != nil {
 		return e.failed(s, j, err)
 	}
@@ -220,6 +380,12 @@ func (e engine) attempt(ctx context.Context, s *State, j *Job) error {
 		return e.failed(s, j, err)
 	}
 	if pr == nil {
+		if err := e.readyToPublish(ctx, j); err != nil {
+			if errors.Is(err, errExistingPR) {
+				return e.save(s)
+			}
+			return e.failed(s, j, err)
+		}
 		pr, err = e.source.create(ctx, j)
 		if err != nil {
 			return e.failed(s, j, err)
