@@ -205,13 +205,16 @@ data in the agent instructions, not as permission to broaden the task.
 
 ## Publishing npm packages
 
-Tag releases build four native archives with checksums and commit metadata.
-After the GitHub release finishes, run the **Publish packages** workflow from
-that same tag, supplying the tag as input. The default `publish=false` builds
-and tests the npm tarballs and saves them as a workflow artifact. Set
-`publish=true` to publish the four native packages followed by the launcher.
-Retries verify existing versions against the staged bytes and skip identical
-uploads; conflicting versions stop publication.
+Pushing a `v*` version tag automatically runs CI, publishes the native GitHub
+release, and uploads the four npm platform packages followed by the launcher.
+Follow the **Publish packages** workflow for the complete pipeline; it keeps all
+artifacts tied to the same tag and commit. No separate manual dispatch is needed.
+
+The manual workflow remains available for recovery: dispatch from the existing
+tag with its tag input and `publish=true`, or use `publish=false` for validation
+only. Existing package bytes are checked for conflicts before uploading.
+Successful uploads do not wait for npm's public version index or run immediate
+public-install checks. Use the explicit registry `verify` command later if needed.
 
 The workflow uses the `packages-publish` environment. Configure npm trusted
 publishing for each of the five `@brokkai/issue-bot*` packages with repository

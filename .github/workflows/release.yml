@@ -1,7 +1,6 @@
 name: Release
 on:
-  push:
-    tags: ['v*']
+  workflow_call:
 permissions:
   contents: read
 concurrency:
@@ -17,6 +16,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Require a release tag
+        env:
+          RELEASE_REF: ${{ github.ref }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: test "$RELEASE_REF" = "refs/tags/$RELEASE_TAG"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
