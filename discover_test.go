@@ -10,7 +10,7 @@ import (
 
 func discoveryRepo(t *testing.T) (string, string) {
 	t.Helper()
-	dir := t.TempDir()
+	dir := canonicalTestDir(t)
 	remote := filepath.Join(dir, "published.git")
 	source := filepath.Join(dir, "source")
 	localGit(t, dir, "init", "--bare", remote)
@@ -81,7 +81,7 @@ func TestDiscoveryFromCwdAndMissingRemote(t *testing.T) {
 	}
 }
 func TestAgentFallbackHonorsExplicitCommands(t *testing.T) {
-	dir := t.TempDir()
+	dir := canonicalTestDir(t)
 	t.Setenv("PATH", dir)
 	if err := os.WriteFile(filepath.Join(dir, "npx"), []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
 		t.Fatal(err)

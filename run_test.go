@@ -15,6 +15,15 @@ import (
 	"github.com/BrokkAi/issue-bot/internal/osrun"
 )
 
+func canonicalTestDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func localGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	out, err := osrun.Run(context.Background(), dir, map[string]string{"GIT_AUTHOR_NAME": "Fixture", "GIT_AUTHOR_EMAIL": "fixture@example.test", "GIT_COMMITTER_NAME": "Fixture", "GIT_COMMITTER_EMAIL": "fixture@example.test"}, append([]string{"git"}, args...)...)
@@ -87,7 +96,7 @@ type fixture struct {
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	root := t.TempDir()
+	root := canonicalTestDir(t)
 	remote := filepath.Join(root, "remote.git")
 	seed := filepath.Join(root, "seed")
 	localGit(t, root, "init", "--bare", "--initial-branch=main", remote)
