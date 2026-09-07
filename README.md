@@ -38,8 +38,8 @@ and an authenticated ACP agent. The default is `codex-acp`; if it is missing,
 download the adapter). Explicit agent commands are used exactly as supplied.
 
 No configuration file is needed. The bot discovers `origin` (or the only remote)
-and the repository's default branch. It creates a managed clone and a separate
-Git worktree for each issue. Your source checkout and uncommitted edits are left
+and the repository's default branch. New workspaces use a private bare Git
+repository and a separate persistent worktree for each issue. Your source checkout and uncommitted edits are left
 alone. Starting it authorizes unattended edits, command execution, commits,
 branch pushes, claim/status comments and PR creation for the configured repository.
 
@@ -177,7 +177,24 @@ Default state lives below `$XDG_STATE_HOME/issue-bot` or
 `~/.local/state/issue-bot`, keyed by remote and base branch. Startup logs the paths.
 State writes use atomic replacement and fsync. Private JSONL transcripts live in
 `state/sessions`; readable live output goes to stderr. Use `--json` for structured
-logs. Retain the managed clone, issue worktrees and state together across restarts.
+logs. Retain the managed workspace, issue worktrees and state together across restarts.
+
+New workspaces keep Git storage in `state/repository.git`, a detached management
+worktree in `checkout`, and each issue's worktree in `checkout-issues/<number>`.
+The management and issue worktrees share only this bot's private repository;
+your checkout, release-bot and other bots have independent Git metadata.
+Existing managed clones and their unfinished issue worktrees continue in place.
+A manually configured checkout must be a standalone clone or this bot's private
+worktree; a linked worktree sharing another repository's Git metadata is rejected.
+
+Each attempt fetches the watched branch. The agent merges current remote changes
+into its assigned issue branch, resolves conflicts, and reruns affected checks
+before returning a fix. Retries retain the same branch, staged/unstaged edits,
+and unfinished merges. Other issue worktrees and the local `master`/`main` branch
+are left alone. Overlapping code changes can still need conflict resolution or
+review; worktree isolation prevents local interference. Existing claim comments
+coordinate separate issue-bot instances, and local locks prevent duplicate daemons
+from using the same workspace.
 
 ACP permission requests are automatically approved. Client filesystem callbacks
 are confined by `os.Root`; agents and terminal commands inherit the bot account's

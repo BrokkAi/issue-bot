@@ -325,7 +325,7 @@ func (e engine) attempt(ctx context.Context, s *State, j *Job) error {
 		return err
 	}
 	e.log.Info("Working on issue", "issue", j.Issue.Number, "title", j.Issue.Title, "attempt", j.Tries, "directory", work.config.Directory)
-	result, err := e.agent(work.config).Execute(ctx, issuePrompt(e.config, j))
+	result, err := e.agent(work.config).Execute(ctx, issuePrompt(work.config, j))
 	if err != nil {
 		var setup *runner.SetupError
 		if errors.As(err, &setup) {

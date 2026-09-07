@@ -17,12 +17,57 @@ type checkout struct{ config Config }
 func (g checkout) git(ctx context.Context, args ...string) (string, error) {
 	return osrun.Run(ctx, g.config.Directory, map[string]string{"GIT_TERMINAL_PROMPT": "0"}, append([]string{"git"}, args...)...)
 }
-func (g checkout) open(ctx context.Context) error {
-	if _, err := os.Stat(g.config.Directory); errors.Is(err, os.ErrNotExist) {
-		if err := os.MkdirAll(filepath.Dir(g.config.Directory), 0700); err != nil {
+func (g checkout) branchRef() string { return "refs/remotes/origin/" + g.config.Branch }
+func (g checkout) repositoryDirectory() string {
+	return filepath.Join(g.config.StateDirectory, "repository.git")
+}
+
+// New worktrees belong to a private repository, never the checkout from which
+// bib was invoked. Branches, fetches, tags and Git configuration stay isolated.
+func (g checkout) create(ctx context.Context) error {
+	repository := g.repositoryDirectory()
+	if err := os.MkdirAll(g.config.StateDirectory, 0700); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(g.config.Directory), 0700); err != nil {
+		return err
+	}
+	if _, err := os.Stat(repository); errors.Is(err, os.ErrNotExist) {
+		if _, err := osrun.Run(ctx, "", map[string]string{"GIT_TERMINAL_PROMPT": "0"}, "git", "clone", "--bare", "--no-hardlinks", "--branch", g.config.Branch, "--origin", "origin", "--", g.config.Remote, repository); err != nil {
 			return err
 		}
-		if _, err := osrun.Run(ctx, "", map[string]string{"GIT_TERMINAL_PROMPT": "0"}, "git", "clone", "--branch", g.config.Branch, "--", g.config.Remote, g.config.Directory); err != nil {
+	} else if err != nil {
+		return err
+	}
+	git := func(args ...string) (string, error) {
+		return osrun.Run(ctx, "", map[string]string{"GIT_TERMINAL_PROMPT": "0"}, append([]string{"git", "--git-dir", repository}, args...)...)
+	}
+	bare, err := git("rev-parse", "--is-bare-repository")
+	if err != nil {
+		return err
+	}
+	remote, err := git("remote", "get-url", "origin")
+	if err != nil {
+		return err
+	}
+	if bare != "true" || remote != g.config.Remote {
+		return errors.New("private worktree repository does not match the configured remote")
+	}
+	// Bare clones have no default fetch mapping. Keep ordinary agent fetches
+	// useful for PR branches too, without updating any local branch.
+	if _, err := git("config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"); err != nil {
+		return err
+	}
+	if _, err := git("fetch", "--tags", "origin", "+refs/heads/"+g.config.Branch+":"+g.branchRef()); err != nil {
+		return err
+	}
+	_, err = git("worktree", "add", "--detach", g.config.Directory, g.branchRef())
+	return err
+}
+
+func (g checkout) open(ctx context.Context) error {
+	if _, err := os.Stat(g.config.Directory); errors.Is(err, os.ErrNotExist) {
+		if err := g.create(ctx); err != nil {
 			return err
 		}
 	} else if err != nil {
@@ -33,7 +78,20 @@ func (g checkout) open(ctx context.Context) error {
 		return err
 	}
 	if root != g.config.Directory {
-		return errors.New("directory must be the root of a managed clone")
+		return errors.New("directory must be the root of a managed checkout")
+	}
+	common, err := g.git(ctx, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return err
+	}
+	common, err = canonical(common)
+	if err != nil {
+		return err
+	}
+	// Preserve existing standalone clones and their issue worktrees. A linked
+	// checkout owned elsewhere would share another bot's refs and Git config.
+	if common != filepath.Join(g.config.Directory, ".git") && common != g.repositoryDirectory() {
+		return errors.New("checkout shares Git metadata outside this bot's workspace; use a separate managed directory")
 	}
 	remote, err := g.git(ctx, "remote", "get-url", "origin")
 	if err != nil {
