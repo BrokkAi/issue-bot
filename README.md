@@ -8,10 +8,15 @@ pull requests for review. A Go daemon with the same no-config startup as
 ## Install and run
 
 ```sh
-go install github.com/BrokkAi/issue-bot/cmd/bib@latest
+npm install -g @brokkai/issue-bot
 cd /path/to/your-repo
 bib
 ```
+
+For a single invocation, use `npx --yes @brokkai/issue-bot` from your repository.
+The npm package requires Node.js 18+ and includes the native binary for
+Linux/macOS on x64 or arm64 through optional dependencies. Keep optional
+dependencies enabled; installing and running the package does not require Go.
 
 Or install a prebuilt Linux/macOS binary (amd64 or arm64):
 
@@ -21,7 +26,11 @@ curl -fsSL https://raw.githubusercontent.com/BrokkAi/issue-bot/master/install.sh
 
 The installer checks the archive's SHA-256 and installs `bib` to `~/.local/bin`.
 Set `INSTALL_DIR` to use another directory. From source, `make build` produces
-`bin/bib`. Source builds require Go 1.27.1.
+`bin/bib`. Source builds require Go 1.27.1. You can also install from Go:
+
+```sh
+go install github.com/BrokkAi/issue-bot/cmd/bib@latest
+```
 
 Runtime requirements: Git, authenticated `gh` with repository read/push/PR access,
 and an authenticated ACP agent. The default is `codex-acp`; if it is missing,
@@ -176,6 +185,33 @@ OS rights. This is not a sandbox. Use an account/container appropriate for the
 repository and its credentials. Transcripts may include code and command output;
 manage their retention externally. Issue text is treated as untrusted problem
 data in the agent instructions, not as permission to broaden the task.
+
+## Publishing npm packages
+
+Tag releases build four native archives with checksums and commit metadata.
+After the GitHub release finishes, run the **Publish packages** workflow from
+that same tag, supplying the tag as input. The default `publish=false` builds
+and tests the npm tarballs and saves them as a workflow artifact. Set
+`publish=true` to publish the four native packages followed by the launcher.
+Retries verify existing versions against the staged bytes and skip identical
+uploads; conflicting versions stop publication.
+
+The workflow uses the `packages-publish` environment. Configure npm trusted
+publishing for each of the five `@brokkai/issue-bot*` packages with repository
+`BrokkAi/issue-bot`, workflow `publish-packages.yml`, and environment
+`packages-publish`. An environment secret named `NPM_TOKEN` can be used for
+bootstrap publication. Only npm is packaged; uv support is pending.
+
+For a local installer check from a clean commit (requires Go, Node.js 24 and npm):
+
+```sh
+node --test --test-isolation=none npm/bib.test.cjs
+python3 -m unittest discover -s scripts -p '*_test.py'
+python3 scripts/smoke_installers.py
+```
+
+The smoke check builds native archives and all five npm tarballs, then installs
+and launches the local platform package offline with lifecycle scripts disabled.
 
 ## Development
 

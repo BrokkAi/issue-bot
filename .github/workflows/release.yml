@@ -40,5 +40,5 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          gh release create "$RELEASE_TAG" dist/*.tar.gz dist/checksums.txt --verify-tag --draft --title "Brokk Issue Bot $RELEASE_TAG" --generate-notes
+          gh release create "$RELEASE_TAG" dist/*.tar.gz dist/checksums.txt dist/release.json --verify-tag --draft --title "Brokk Issue Bot $RELEASE_TAG" --generate-notes
           gh release edit "$RELEASE_TAG" --draft=false --latest
