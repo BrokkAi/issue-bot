@@ -67,7 +67,7 @@ def package(tag, directory):
         for target in TARGETS:
             goos, goarch = target.split("-")
             env = dict(os.environ, CGO_ENABLED="0", GOOS=goos, GOARCH=goarch)
-            run("go", "build", "-trimpath", "-buildvcs=false", "-ldflags=-s -w", "-o", str(binary), "./cmd/bib", env=env)
+            run("go", "build", "-trimpath", "-buildvcs=false", f"-ldflags=-s -w -X main.version={tag}", "-o", str(binary), "./cmd/bib", env=env)
             metadata = {"tag": tag, "commit": sha, "target": target}
             name = archive_name(tag, target)
             archive(directory / name, {

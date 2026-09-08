@@ -53,6 +53,7 @@ bib --agent your-acp-agent --agent-arg=--stdio
 bib --claim-timeout 15m
 bib --draft=false
 bib status
+bib version
 bib retry --issue 123 --once
 ```
 
@@ -61,6 +62,8 @@ most one eligible issue (or reconciles one completed job), then exits. `status`
 prints saved JSON without starting an agent. `retry` resets pending/blocked
 attempt budgets and resumes work; `--issue` restricts it to that issue. Run
 `bib --help` for all flags.
+
+`bib version` prints the embedded release tag. Local builds report `dev`; binaries installed with `go install ...@version` report the module version.
 
 ## How it works
 

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -32,5 +33,22 @@ func TestCLIOverridesAndInterspersedFlags(t *testing.T) {
 	err := executeWithRun(context.Background(), []string{"once", "--config", path, "--issue", "7", "--claim-timeout", "2m", "--draft=false", "--model", "fixture", "--effort", "low", "--label", "bug", "--label", "ready"}, slog.New(slog.NewTextHandler(io.Discard, nil)), run)
 	if err != nil || !called {
 		t.Fatalf("CLI %v %v", called, err)
+	}
+}
+
+func TestVersionCommand(t *testing.T) {
+	original := version
+	version = "v1.2.3"
+	t.Cleanup(func() { version = original })
+
+	var output strings.Builder
+	if err := versionCommand(nil, &output); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output.String(), "v1.2.3\n"; got != want {
+		t.Fatalf("version output = %q, want %q", got, want)
+	}
+	if err := versionCommand([]string{"extra"}, &output); err == nil {
+		t.Fatal("version accepted an argument")
 	}
 }
