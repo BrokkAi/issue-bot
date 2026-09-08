@@ -12,13 +12,15 @@ import (
 )
 
 type engine struct {
-	config Config
-	source issueSource
-	log    *slog.Logger
-	agent  func(Config) Agent
-	now    func() time.Time
-	wait   func(context.Context, time.Duration) error
-	lease  *lease
+	config  Config
+	source  issueSource
+	log     *slog.Logger
+	agent   func(Config) Agent
+	now     func() time.Time
+	wait    func(context.Context, time.Duration) error
+	lease   *lease
+	observe func(Progress)
+	active  *Job
 }
 
 func Run(ctx context.Context, cfg Config, log *slog.Logger, once bool) error {
@@ -44,9 +46,12 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, once bool) error {
 		state = &State{Format: 1, Remote: cfg.Remote, Branch: cfg.Branch, Directory: cfg.Directory, Repo: cfg.GitHubRepo(), Host: cfg.GitHub.Host, Jobs: map[int]*Job{}}
 	}
 	e := engine{config: cfg, source: githubClient{cfg}, log: log, now: time.Now, agent: func(c Config) Agent { return agentProcess{c, log} }}
+	e.observe, _ = ctx.Value(progressKey{}).(func(Progress))
+	e.report(state, "starting", "Loading saved issues")
 	for {
 		worked, err := e.step(ctx, state)
 		if err != nil {
+			e.report(state, "paused", err.Error())
 			var setup *runner.SetupError
 			if once || errors.As(err, &setup) || ctx.Err() != nil {
 				return err
@@ -63,6 +68,7 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, once bool) error {
 		if worked {
 			continue
 		}
+		e.report(state, "waiting", "Waiting for eligible issues")
 		log.Info("Waiting for eligible issues", "poll", time.Duration(cfg.Poll))
 		timer := time.NewTimer(time.Duration(cfg.Poll))
 		select {
@@ -73,7 +79,13 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger, once bool) error {
 		}
 	}
 }
-func (e engine) save(s *State) error { return writeState(e.config, s) }
+func (e engine) save(s *State) error {
+	if err := writeState(e.config, s); err != nil {
+		return err
+	}
+	e.report(s, "", "")
+	return nil
+}
 func (e engine) manager() claimManager {
 	return claimManager{source: e.source, config: e.config, now: e.now, wait: e.wait}
 }
@@ -99,12 +111,15 @@ func (e engine) complete(ctx context.Context, s *State, j *Job, p *PullRequest) 
 	if err := e.save(s); err != nil {
 		return err
 	}
+	e.active = j
+	e.report(s, "reconciled", "Reconciled PR: "+j.Issue.Title)
 	return e.syncClaim(ctx, s, j)
 }
 func (e engine) step(ctx context.Context, s *State) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
+	e.report(s, "checking", "Reconciling saved issues and pull requests")
 	// Deliver saved completion/release updates even if the issue was closed or
 	// is no longer returned by the issue query. Never rerun an agent to do this.
 	numbers := make([]int, 0, len(s.Jobs))
@@ -134,6 +149,7 @@ func (e engine) step(ctx context.Context, s *State) (bool, error) {
 			}
 		}
 	}
+	e.report(s, "fetching", "Fetching eligible GitHub issues")
 	issues, err := e.source.issues(ctx)
 	if err != nil {
 		return false, err
@@ -197,6 +213,8 @@ func (e engine) step(ctx context.Context, s *State) (bool, error) {
 			return true, nil
 		}
 	}
+	e.active = nil
+	e.report(s, "waiting", "Waiting for eligible issues")
 	return false, nil
 }
 func (e engine) releaseClaim(ctx context.Context, s *State, j *Job, detail string) error {
@@ -211,6 +229,8 @@ func (e engine) releaseClaim(ctx context.Context, s *State, j *Job, detail strin
 	return e.syncClaim(ctx, s, j)
 }
 func (e engine) claimedAttempt(ctx context.Context, s *State, j *Job) (bool, error) {
+	e.active = j
+	e.report(s, "claiming", fmt.Sprintf("Claiming #%d: %s", j.Issue.Number, j.Issue.Title))
 	if j.Claim == nil || j.Claim.Status != "working" || !j.Claim.ExpiresAt.After(e.now()) {
 		j.Claim = newClaim(e.config, j.Issue.Number, e.now())
 	}
@@ -260,7 +280,21 @@ func (e engine) claimedAttempt(ctx context.Context, s *State, j *Job) (bool, err
 	// Release promptly on cancellation, with its own short cleanup budget.
 	finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
-	return true, errors.Join(attemptErr, e.syncClaim(finishCtx, s, j))
+	err = errors.Join(attemptErr, e.syncClaim(finishCtx, s, j))
+	phase, task := "paused", j.Failure
+	switch j.Status {
+	case "submitted":
+		phase, task = "complete", "PR submitted: "+j.Issue.Title
+	case "blocked":
+		phase = "blocked"
+	case "has_pr", "skipped":
+		phase, task = "skipped", "Issue skipped: "+j.Issue.Title
+	}
+	if err != nil {
+		phase, task = "paused", err.Error()
+	}
+	e.report(s, phase, task)
+	return true, err
 }
 func (e engine) readyToPublish(ctx context.Context, j *Job) error {
 	if err := ctx.Err(); err != nil {
@@ -301,6 +335,7 @@ func (e engine) recordPull(j *Job, p *PullRequest) {
 func (e engine) attempt(ctx context.Context, s *State, j *Job) error {
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(e.config.Timeout))
 	defer cancel()
+	e.report(s, "preparing", "Preparing issue worktree: "+j.Issue.Title)
 	g := checkout{e.config}
 	if err := g.open(ctx); err != nil {
 		return err
@@ -324,6 +359,7 @@ func (e engine) attempt(ctx context.Context, s *State, j *Job) error {
 	if err := e.save(s); err != nil {
 		return err
 	}
+	e.report(s, "attempt", fmt.Sprintf("Working on #%d: %s", j.Issue.Number, j.Issue.Title))
 	e.log.Info("Working on issue", "issue", j.Issue.Number, "title", j.Issue.Title, "attempt", j.Tries, "directory", work.config.Directory)
 	result, err := e.agent(work.config).Execute(ctx, issuePrompt(work.config, j))
 	if err != nil {
@@ -352,6 +388,7 @@ func (e engine) attempt(ctx context.Context, s *State, j *Job) error {
 	if err := e.save(s); err != nil {
 		return err
 	}
+	e.report(s, "verifying", "Verifying changes and issue eligibility: "+j.Issue.Title)
 	head, err := work.verify(ctx, j)
 	if err != nil {
 		return e.failed(s, j, err)
@@ -371,6 +408,7 @@ func (e engine) attempt(ctx context.Context, s *State, j *Job) error {
 		}
 		return e.failed(s, j, err)
 	}
+	e.report(s, "publishing", "Pushing branch and preparing PR: "+j.Issue.Title)
 	if err := work.push(ctx, j); err != nil {
 		return e.failed(s, j, err)
 	}

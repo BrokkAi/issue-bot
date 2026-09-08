@@ -65,6 +65,44 @@ attempt budgets and resumes work; `--issue` restricts it to that issue. Run
 
 `bib version` prints the embedded release tag. Local builds report `dev`; binaries installed with `go install ...@version` report the module version.
 
+## Terminal dashboard
+
+Interactive runs show the same live dashboard as bug-bot. It fits the current
+terminal or tmux pane and adjusts when resized. Each pane runs one repository.
+
+```sh
+bib /path/to/repo           # live dashboard
+bib /path/to/repo --plain   # scrolling logs and agent transcript
+bib /path/to/repo --json    # structured logs
+```
+
+The overview shows the repository, branch and active base commit, issue task,
+active tool, uptime, attempt budget, and next poll countdown. Larger panes also
+show the selected model and reasoning effort. Saved counts cover all recorded
+jobs: issues, submitted PRs, existing PRs, pending, blocked, and skipped. A PR is
+counted as submitted only after confirmation; restored jobs remain in the totals.
+
+The issue browser shows up to 200 saved jobs ordered by issue number, including
+the active issue. Details include the issue, branch, result, test evidence,
+failure, retry eligibility, and PR link. Run counters track PRs completed during
+this invocation, attempts, agent starts, tools, and error log events.
+
+- `1`, `2`, `3` or `Tab`: switch overview, issues, and activity.
+- `↑` / `↓` or `k` / `j`: browse results or scroll activity.
+- `Enter`: inspect the selected result. `Esc`: return to the list.
+- `Page Up` / `Page Down`: scroll details. `g` / `G`: jump to start/end;
+  `G` resumes following live activity.
+- `q` or `Ctrl+C`: stop the bot and its agent, save progress, and restore the terminal.
+
+Activity keeps recent output; full agent transcripts remain in the state
+directory. On exit, a summary and changed result links stay in the terminal.
+`once` exits when its check or attempt finishes.
+
+Piped input, redirected stderr, and `TERM=dumb` automatically use scrolling
+output. `--plain` and `--json` disable the dashboard and are mutually exclusive.
+`NO_COLOR` disables colors. `status`, `version`, and help retain their existing
+output and never open the dashboard.
+
 ## How it works
 
 1. Walk all open, unlocked issues, oldest first, with pagination. No label
