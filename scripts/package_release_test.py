@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 import tempfile
+import tarfile
 import unittest
 from unittest.mock import patch
 
@@ -20,7 +21,7 @@ class ReleaseAssets(unittest.TestCase):
         for target in release.TARGETS:
             name = release.archive_name(self.tag, target)
             release.archive(self.assets / name, {
-                "bib": b"#!/bin/sh\nexit 0\n", "LICENSE": b"license", "README.md": b"readme",
+                "bib": b"#!/bin/sh\nexit 0\n", **release.licenses.legal_files(), "README.md": b"readme",
                 "BUILD.json": json.dumps({"tag": self.tag, "commit": self.sha, "target": target}).encode(),
             }, 0)
             data = (self.assets / name).read_bytes()
@@ -52,3 +53,22 @@ class ReleaseAssets(unittest.TestCase):
         self.write_manifest()
         with self.assertRaisesRegex(ValueError, "build metadata"):
             release.verify_local(self.tag, self.assets, self.sha)
+
+    def test_missing_or_altered_notice_is_rejected_with_valid_checksums(self):
+        asset = self.manifest["assets"][0]
+        path = self.assets / asset["name"]
+        with tarfile.open(path, "r:gz") as archive:
+            original = {m.name: archive.extractfile(m).read() for m in archive.getmembers()}
+        for missing in (True, False):
+            with self.subTest(missing=missing):
+                files = dict(original)
+                if missing:
+                    del files["NOTICE"]
+                else:
+                    files["NOTICE"] = b"incorrect attribution"
+                release.archive(path, files, 0)
+                data = path.read_bytes()
+                asset.update(size=len(data), sha256=release.digest(data))
+                self.write_manifest()
+                with self.assertRaisesRegex(ValueError, "missing or unexpected contents|archive legal file"):
+                    release.verify_local(self.tag, self.assets, self.sha)

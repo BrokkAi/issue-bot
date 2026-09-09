@@ -13,6 +13,8 @@ import subprocess
 import tarfile
 import tempfile
 
+import licenses
+
 
 ROOT = Path(__file__).resolve().parent.parent
 TARGETS = ("linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64")
@@ -56,6 +58,7 @@ def package(tag, directory):
     validate_tag(tag)
     if run("git", "status", "--porcelain").strip():
         raise ValueError("commit all preparation changes before packaging a release")
+    licenses.check()
     directory.mkdir(parents=True, exist_ok=True)
     if any(directory.iterdir()):
         raise ValueError("package output directory must be empty")
@@ -66,13 +69,14 @@ def package(tag, directory):
         binary = Path(temp) / "bib"
         for target in TARGETS:
             goos, goarch = target.split("-")
-            env = dict(os.environ, CGO_ENABLED="0", GOOS=goos, GOARCH=goarch)
+            env = dict(os.environ, CGO_ENABLED="0", GOOS=goos, GOARCH=goarch,
+                       GOWORK="off", GOFLAGS="-mod=readonly")
             run("go", "build", "-trimpath", "-buildvcs=false", f"-ldflags=-s -w -X main.version={tag}", "-o", str(binary), "./cmd/bib", env=env)
             metadata = {"tag": tag, "commit": sha, "target": target}
             name = archive_name(tag, target)
             archive(directory / name, {
                 "bib": binary.read_bytes(),
-                "LICENSE": (ROOT / "LICENSE").read_bytes(),
+                **licenses.legal_files(),
                 "README.md": (ROOT / "README.md").read_bytes(),
                 "BUILD.json": json.dumps(metadata, sort_keys=True).encode() + b"\n",
             }, timestamp)
@@ -104,12 +108,16 @@ def verify_local(tag, directory, sha):
             raise ValueError(f"corrupt release asset: {path.name}")
         with tarfile.open(path, "r:gz") as tar:
             entries = tar.getmembers()
-            if len(entries) != 4 or {m.name for m in entries} != {"bib", "LICENSE", "README.md", "BUILD.json"}:
+            expected_entries = {"bib", "README.md", "BUILD.json", *licenses.LEGAL_FILES}
+            if len(entries) != len(expected_entries) or {m.name for m in entries} != expected_entries:
                 raise ValueError("archive has missing or unexpected contents")
             if any(not m.isfile() or m.size <= 0 for m in entries):
                 raise ValueError("archive contains an invalid entry")
             if tar.getmember("bib").mode & 0o111 == 0:
                 raise ValueError("release binary is not executable")
+            for filename, expected_text in licenses.legal_files().items():
+                if tar.extractfile(filename).read() != expected_text:
+                    raise ValueError(f"archive legal file does not match the checkout: {filename}")
             metadata = json.load(tar.extractfile("BUILD.json"))
             target = next(t for t in TARGETS if archive_name(tag, t) == path.name)
             if metadata != {"tag": tag, "commit": sha, "target": target}:

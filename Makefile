@@ -1,7 +1,9 @@
-.PHONY: build test check
+.PHONY: build test check licenses
 build:
 	go build -o bin/bib ./cmd/bib
 test:
 	go test -race ./...
-check: test
+licenses:
+	python3 scripts/licenses.py
+check: test licenses
 	go vet ./...

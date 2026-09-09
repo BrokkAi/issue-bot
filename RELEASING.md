@@ -32,3 +32,12 @@ available for later public-integrity checks after registry propagation.
 
 If publication fails after draft creation, inspect the draft and uploaded assets.
 Complete or replace that draft explicitly; do not move published version tags.
+
+## License validation
+
+Before committing release preparation, run `python3 scripts/licenses.py`.
+For dependency or Go version changes, follow [licenses/README.md](licenses/README.md)
+to review the policy and regenerate notices. Native packaging repeats this
+check and includes the exact project license, notice, and dependency report.
+Every npm package retains these files from the verified native assets. The
+package smoke test inspects their bytes as well as exercising installation.

@@ -8,6 +8,8 @@ import subprocess
 import tarfile
 import tempfile
 
+import licenses
+
 import package_release as release
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -50,6 +52,7 @@ def package(tag, assets, output, sha):
             ], cwd=directory)
             info = json.loads(result)[0]
             tarball = npm_output / info["filename"]
+            licenses.check_npm(tarball)
             packages.append({"name": name, "version": npm_version, "filename": tarball.name,
                              "sha256": release.digest(tarball.read_bytes()), "integrity": info["integrity"]})
 
@@ -57,18 +60,18 @@ def package(tag, assets, output, sha):
         for target in release.TARGETS:
             name = release.archive_name(tag, target)
             with tarfile.open(assets / name, "r:gz") as bundle:
-                files = {member: bundle.extractfile(member).read() for member in ("bib", "LICENSE", "README.md", "BUILD.json")}
+                files = {member: bundle.extractfile(member).read() for member in ("bib", "README.md", "BUILD.json", *licenses.LEGAL_FILES)}
             system, go_arch = target.split("-")
             arch = {"amd64": "x64", "arm64": "arm64"}[go_arch]
             package_name = f"{NPM_ROOT}-{system}-{arch}"
             dependencies[package_name] = npm_version
             npm_pack(package_name, {"os": [system], "cpu": [arch], "description": f"Brokk Issue Bot native binary for {system}/{arch}"},
-                     {"bin/bib": files["bib"], "LICENSE": files["LICENSE"], "README.md": files["README.md"], "BUILD.json": files["BUILD.json"]})
+                     {"bin/bib": files["bib"], **{name: files[name] for name in licenses.LEGAL_FILES}, "README.md": files["README.md"], "BUILD.json": files["BUILD.json"]})
         npm_pack(NPM_ROOT, {
             "description": "Brokk Issue Bot: autonomous issue fixes through Agent Client Protocol",
             "bin": {"bib": "bin/bib.cjs"}, "engines": {"node": ">=18"},
             "os": ["linux", "darwin"], "cpu": ["x64", "arm64"], "optionalDependencies": dependencies,
-        }, {"bin/bib.cjs": (ROOT / "npm/bib.cjs").read_bytes(), "LICENSE": files["LICENSE"], "README.md": files["README.md"]})
+        }, {"bin/bib.cjs": (ROOT / "npm/bib.cjs").read_bytes(), **{name: files[name] for name in licenses.LEGAL_FILES}, "README.md": files["README.md"]})
         write_json(npm_output / "manifest.json", {"tag": tag, "commit": sha, "packages": packages})
 
     print(f"Built {len(packages)} npm packages for {tag} at {sha}")

@@ -294,5 +294,17 @@ Protocol/API references: [ACP v1](https://agentclientprotocol.com/protocol/v1/ov
 [GitHub issues](https://docs.github.com/en/rest/issues/issues),
 [GitHub pull requests](https://docs.github.com/en/rest/pulls/pulls).
 
-Licensed under [Apache-2.0](LICENSE). Repository discovery and CLI/runner patterns
+Repository discovery and CLI/runner patterns
 originate in BrokkAi/release-bot; common ACP code is maintained in BrokkAi/acp-go.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) and our
+[Code of Conduct](CODE_OF_CONDUCT.md). Report vulnerabilities privately using
+[SECURITY.md](SECURITY.md).
+
+## License
+
+Licensed under [Apache-2.0](LICENSE). See [NOTICE](NOTICE) for project
+attribution and [licenses/README.md](licenses/README.md) for dependency terms,
+third-party notices, and the license review process.
