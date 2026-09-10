@@ -244,6 +244,108 @@ func TestVerificationFailureDoesNotPush(t *testing.T) {
 		t.Fatal("pushed before verification")
 	}
 }
+
+func TestVerifierMustPreserveReviewedArtifact(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		command    string
+		status     string
+		headChange bool
+		branch     string
+		clean      bool
+	}{
+		{name: "tracked edits", command: "printf 'verifier edit\\n' >> fix.txt", status: "M fix.txt"},
+		{name: "staged edits", command: "printf 'verifier edit\\n' >> fix.txt && git add fix.txt", status: "M  fix.txt"},
+		{name: "untracked file", command: "printf 'verifier edit\\n' > extra.txt", status: "?? extra.txt"},
+		{name: "new commit", command: "printf 'verifier edit\\n' >> fix.txt && git commit -am 'Verifier commit'", headChange: true},
+		{name: "empty commit", command: "git commit --allow-empty -m 'Verifier commit'", headChange: true},
+		{name: "branch change", command: "git switch -c verifier-branch", branch: "verifier-branch"},
+		{name: "detached HEAD", command: "git switch --detach", branch: "detached"},
+		{name: "clean verifier", command: "test \"$ISSUE_NUMBER\" = 1 && test -f fix.txt", clean: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.source.items = f.source.items[:1]
+			f.e.config.Verify = []string{"sh", "-c", tc.command}
+			var reviewed string
+			normal := f.e.agent
+			f.e.agent = func(c Config) Agent {
+				return scriptedAgent(func(ctx context.Context, prompt string) (Result, error) {
+					result, err := normal(c).Execute(ctx, prompt)
+					reviewed = localGit(t, c.Directory, "rev-parse", "HEAD")
+					return result, err
+				})
+			}
+			if _, err := f.e.step(context.Background(), f.s); err != nil {
+				t.Fatal(err)
+			}
+			saved, err := ReadState(f.e.config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			j := saved.Jobs[1]
+			dir := (checkout{f.e.config}).workdir(j)
+			refs := localGit(t, dir, "ls-remote", "--heads", "origin", "refs/heads/"+j.Branch)
+			if tc.clean {
+				if f.source.creates != 1 || j.Status != "submitted" || refs != reviewed+"\trefs/heads/"+j.Branch || f.source.prs[1].Head.SHA != reviewed {
+					t.Fatalf("clean verifier did not publish reviewed commit: job=%+v refs=%q", j, refs)
+				}
+			} else if f.source.creates != 0 || j.Status != "pending" || j.Failure == "" || refs != "" {
+				t.Errorf("published verifier mutation or lost failure: creates=%d job=%+v refs=%q", f.source.creates, j, refs)
+			}
+			if got := localGit(t, dir, "status", "--porcelain"); got != tc.status {
+				t.Errorf("verifier edits not preserved: got %q, want %q", got, tc.status)
+			}
+			if changed := localGit(t, dir, "rev-parse", "HEAD") != reviewed; changed != tc.headChange {
+				t.Error("verifier HEAD not preserved")
+			}
+			wantBranch := tc.branch
+			if wantBranch == "" {
+				wantBranch = j.Branch
+			} else if wantBranch == "detached" {
+				wantBranch = ""
+			}
+			if got := localGit(t, dir, "branch", "--show-current"); got != wantBranch {
+				t.Errorf("verifier branch not preserved: got %q, want %q", got, wantBranch)
+			}
+		})
+	}
+}
+
+func TestPushUsesVerifiedCommit(t *testing.T) {
+	f := newFixture(t)
+	g := checkout{f.e.config}
+	ctx := context.Background()
+	if err := g.open(ctx); err != nil {
+		t.Fatal(err)
+	}
+	j := &Job{Issue: f.source.items[0], Branch: branchName(g.config, 1), Base: localGit(t, g.config.Directory, "rev-parse", "HEAD")}
+	work, err := g.prepare(ctx, j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.e.agent(work.config).Execute(ctx, ""); err != nil {
+		t.Fatal(err)
+	}
+	head, err := work.verify(ctx, j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate HEAD moving between validation and publication.
+	writeTestFile(t, filepath.Join(work.config.Directory, "fix.txt"), "later change\n")
+	localGit(t, work.config.Directory, "commit", "-am", "Later unverified change")
+	later := localGit(t, work.config.Directory, "rev-parse", "HEAD")
+	if err := work.push(ctx, j, head); err != nil {
+		t.Fatal(err)
+	}
+	if got := localGit(t, work.config.Directory, "ls-remote", "--heads", "origin", "refs/heads/"+j.Branch); got != head+"\trefs/heads/"+j.Branch {
+		t.Fatalf("pushed an unverified commit: %q", got)
+	}
+	if localGit(t, work.config.Directory, "rev-parse", "HEAD") != later {
+		t.Fatal("push discarded later local work")
+	}
+}
+
 func TestLocksAndStateIdentity(t *testing.T) {
 	f := newFixture(t)
 	unlock, err := lockConfig(f.e.config)

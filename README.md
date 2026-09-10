@@ -211,6 +211,10 @@ to `AGENTS.md`, `CONTRIBUTING.md`, and `README.md`. `issue` can pin one issue nu
 
 The verifier runs as an argument array, without shell expansion, in the issue
 worktree with `ISSUE_NUMBER` set. Keep it outside the agent's writable worktree.
+It must leave HEAD, the assigned branch, and the clean worktree unchanged. The
+bot repeats its publication checks after verification and pushes the exact
+validated commit. Failed verification leaves local work intact for inspection
+and retry.
 
 ## State and diagnostics
 
