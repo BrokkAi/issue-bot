@@ -172,6 +172,32 @@ func (g checkout) prepare(ctx context.Context, j *Job) (checkout, error) {
 	return work, err
 }
 func (g checkout) verify(ctx context.Context, j *Job) (string, error) {
+	head, err := g.publicationHead(ctx, j)
+	if err != nil {
+		return "", err
+	}
+	if len(g.config.Verify) > 0 {
+		if _, err := osrun.Run(ctx, g.config.Directory, map[string]string{"ISSUE_NUMBER": fmt.Sprint(j.Issue.Number)}, g.config.Verify...); err != nil {
+			return "", fmt.Errorf("operator verification: %w", err)
+		}
+		// A successful command must leave the exact reviewed revision and a
+		// publishable checkout. Retain any failed work for inspection/retry.
+		after, err := g.publicationHead(ctx, j)
+		if err != nil {
+			return "", fmt.Errorf("after operator verification: %w", err)
+		}
+		if after != head {
+			return "", errors.New("operator verification changed HEAD")
+		}
+	}
+	return head, nil
+}
+
+func (g checkout) publicationHead(ctx context.Context, j *Job) (string, error) {
+	head, err := g.git(ctx, "rev-parse", "HEAD")
+	if err != nil {
+		return "", err
+	}
 	branch, err := g.git(ctx, "symbolic-ref", "--short", "HEAD")
 	if err != nil {
 		return "", err
@@ -186,24 +212,19 @@ func (g checkout) verify(ctx context.Context, j *Job) (string, error) {
 	if status != "" {
 		return "", errors.New("agent left uncommitted changes")
 	}
-	if _, err := g.git(ctx, "merge-base", "--is-ancestor", j.Base, "HEAD"); err != nil {
+	if _, err := g.git(ctx, "merge-base", "--is-ancestor", j.Base, head); err != nil {
 		return "", errors.New("issue branch no longer contains its starting commit")
 	}
-	diff, err := g.git(ctx, "diff", "--stat", j.Base, "HEAD")
+	diff, err := g.git(ctx, "diff", "--stat", j.Base, head)
 	if err != nil {
 		return "", err
 	}
 	if strings.TrimSpace(diff) == "" {
 		return "", errors.New("issue branch has no changes")
 	}
-	if len(g.config.Verify) > 0 {
-		if _, err := osrun.Run(ctx, g.config.Directory, map[string]string{"ISSUE_NUMBER": fmt.Sprint(j.Issue.Number)}, g.config.Verify...); err != nil {
-			return "", fmt.Errorf("operator verification: %w", err)
-		}
-	}
-	return g.git(ctx, "rev-parse", "HEAD")
+	return head, nil
 }
-func (g checkout) push(ctx context.Context, j *Job) error {
+func (g checkout) push(ctx context.Context, j *Job, head string) error {
 	remote, err := g.git(ctx, "remote", "get-url", "--push", "origin")
 	if err != nil {
 		return err
@@ -211,6 +232,6 @@ func (g checkout) push(ctx context.Context, j *Job) error {
 	if remote != g.config.Remote {
 		return errors.New("push URL differs from configured remote")
 	}
-	_, err = g.git(ctx, "push", "origin", "HEAD:refs/heads/"+j.Branch)
+	_, err = g.git(ctx, "push", "origin", head+":refs/heads/"+j.Branch)
 	return err
 }
