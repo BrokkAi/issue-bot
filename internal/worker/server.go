@@ -48,6 +48,7 @@ type Request struct {
 	Host           string             `json:"host"`
 	Agent          runner.AgentConfig `json:"agent"`
 	Verify         []string           `json:"verify,omitempty"`
+	Issue          int                `json:"issue,omitempty"`
 	PR             int                `json:"pr,omitempty"`
 	BaseSHA        string             `json:"base_sha,omitempty"`
 	HeadSHA        string             `json:"head_sha,omitempty"`

@@ -186,6 +186,10 @@ private to the local service, and the process exits after Town requests shutdown
 
 Worker protocol v1 uses standard-library HTTP with JSON messages:
 
+Town may include an `issue` number in a run request to constrain the operation to
+one explicitly admitted issue. The worker advertises the `exact-issue` capability;
+an omitted issue retains repository-wide behavior for existing clients.
+
 - `GET /v1/initialize` returns the protocol range, bot identity, release version,
   and capabilities. Town requires `issue-result` as well as common `run` and
   `progress` capabilities.

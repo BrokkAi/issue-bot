@@ -69,13 +69,13 @@ func startWorker(t *testing.T, run RunFunc) (*http.Client, string) {
 
 func TestInitializeAndVersionedRunStream(t *testing.T) {
 	client, _ := startWorker(t, func(ctx context.Context, request Request, progress func(Progress)) (Result, error) {
-		if request.Protocol != 1 || request.Remote != "https://example.invalid/repo.git" {
+		if request.Protocol != 1 || request.Remote != "https://example.invalid/repo.git" || request.Issue != 42 {
 			return Result{}, errors.New("invalid request")
 		}
 		progress(Progress{Phase: "investigating", Task: "fixture"})
 		return Result{Issue: &IssueResult{Owned: []IssueOwnership{{PR: 7, Branch: "town/7", Issue: 7}}}}, nil
 	})
-	body, _ := json.Marshal(Request{Protocol: 1, Remote: "https://example.invalid/repo.git"})
+	body, _ := json.Marshal(Request{Protocol: 1, Remote: "https://example.invalid/repo.git", Issue: 42})
 	resp, err := client.Post("http://worker/v1/runs", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)

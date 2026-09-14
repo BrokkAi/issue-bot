@@ -32,7 +32,7 @@ func workerCommand(ctx context.Context, args []string, version string) error {
 	}
 	return worker.Serve(ctx, *socket, worker.Initialize{
 		Protocol: worker.ProtocolVersion, MinimumProtocol: worker.MinimumProtocol,
-		Bot: "issue-bot", Version: version, Capabilities: []string{"run", "progress", "issue-result"},
+		Bot: "issue-bot", Version: version, Capabilities: []string{"run", "progress", "issue-result", "exact-issue"},
 	}, func(ctx context.Context, request worker.Request, progress func(worker.Progress)) (worker.Result, error) {
 		cfg := bot.DefaultConfig()
 		cfg.Remote = request.Remote
@@ -44,6 +44,7 @@ func workerCommand(ctx context.Context, args []string, version string) error {
 		cfg.GitHub.Host = request.Host
 		cfg.Draft = false
 		cfg.Verify = request.Verify
+		cfg.Issue = request.Issue
 		ctx = bot.WithProgress(ctx, func(p bot.Progress) {
 			progress(worker.Progress{Phase: p.Phase, Task: p.Task})
 		})
