@@ -178,6 +178,28 @@ deleted comment stops renewal; a previously saved completion can be posted again
 if its comment was deleted. Issues/PR read access, issue-comment write access,
 and the existing push/PR-creation rights are required.
 
+## Brokk Town worker service
+
+`bib worker --socket PATH` serves one-shot issue implementation operations to Brokk
+Town over a private Unix-domain socket. The socket is mode `0600`; the endpoint is
+private to the local service, and the process exits after Town requests shutdown.
+
+Worker protocol v1 uses standard-library HTTP with JSON messages:
+
+- `GET /v1/initialize` returns the protocol range, bot identity, release version,
+  and capabilities. Town requires `issue-result` as well as common `run` and
+  `progress` capabilities.
+- `POST /v1/runs` accepts one strict JSON task and responds with contiguous
+  newline-delimited JSON events: `progress`, optional typed `result`,
+  and `error`, `canceled`, or `complete`.
+- `POST /v1/shutdown` asks the service to stop after the current stream.
+
+Version and capability negotiation happen before work starts. Town does not read
+this bot's private state files; issue and review outcomes are explicit protocol
+results when applicable, while GitHub remains the durable source for receipts.
+The schemas are independent of the Unix HTTP transport, allowing an authenticated
+TLS transport to be added later without changing worker semantics.
+
 ## Optional configuration
 
 `bib --config issue-bot.json` reads a strict JSON object. There is no implicitly
