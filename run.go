@@ -409,7 +409,7 @@ func (e engine) attempt(ctx context.Context, s *State, j *Job) error {
 		return e.failed(s, j, err)
 	}
 	e.report(s, "publishing", "Pushing branch and preparing PR: "+j.Issue.Title)
-	if err := work.push(ctx, j); err != nil {
+	if err := work.push(ctx, j, head); err != nil {
 		return e.failed(s, j, err)
 	}
 	// Recheck after push in case an earlier creation completed after a timeout.
