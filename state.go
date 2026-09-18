@@ -1,6 +1,7 @@
 package issuebot
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,7 +29,20 @@ type Job struct {
 	Status       string    `json:"status"`
 	URL          string    `json:"url,omitempty"`
 	Result       *Result   `json:"result,omitempty"`
+	// Superseded lists pull requests Brokk Town closed after review and asked
+	// the bot to replace. They never count as this issue's existing PR again.
+	Superseded []int `json:"superseded,omitempty"`
 }
+
+func (j *Job) superseded(n int) bool {
+	for _, s := range j.Superseded {
+		if s == n {
+			return true
+		}
+	}
+	return false
+}
+
 type State struct {
 	Format    int          `json:"format"`
 	Remote    string       `json:"remote"`
@@ -120,6 +134,80 @@ func lockConfig(cfg Config) (func(), error) {
 	}
 	return func() { checkoutUnlock(); stateUnlock() }, nil
 }
+
+// Requeue prepares one issue for a fresh implementation after Town closed its
+// pull request. The job returns to pending with a clean attempt budget, the
+// closed PR is recorded so it never counts as an existing PR again, and any
+// open claim is released so the next attempt can claim the issue anew.
+func Requeue(cfg Config, pr int) error {
+	if cfg.Issue < 1 || pr < 1 {
+		return errors.New("requeue requires an issue and the superseded pull request number")
+	}
+	unlock, err := lockConfig(cfg)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	s, err := ReadState(cfg)
+	if err != nil {
+		return err
+	}
+	if s == nil {
+		s = &State{Format: 1, Remote: cfg.Remote, Branch: cfg.Branch, Directory: cfg.Directory, Repo: cfg.GitHubRepo(), Host: cfg.GitHub.Host, Jobs: map[int]*Job{}}
+	}
+	j := s.Jobs[cfg.Issue]
+	if j == nil {
+		j = &Job{Issue: Issue{Number: cfg.Issue}, Branch: branchName(cfg, cfg.Issue)}
+		s.Jobs[cfg.Issue] = j
+	}
+	if j.Claim != nil && j.Claim.Status == "working" {
+		return errors.New("issue is being worked on; requeue it after the attempt ends")
+	}
+	if !j.superseded(pr) {
+		j.Superseded = append(j.Superseded, pr)
+	}
+	j.Status = "pending"
+	j.Tries = 0
+	j.RetryAt = time.Time{}
+	j.Failure = ""
+	j.URL = ""
+	j.Result = nil
+	j.Base = ""
+	if err := discardWork(cfg, j); err != nil {
+		return err
+	}
+	if j.Claim != nil && j.Claim.Status != "released" {
+		j.Claim.Status = "released"
+		j.Claim.Detail = fmt.Sprintf("Brokk Town closed pull request #%d after review and requeued the issue for a fresh attempt.", pr)
+		j.ClaimPending = true
+	}
+	return writeState(cfg, s)
+}
+
+// discardWork removes the superseded attempt's worktree and local branch so the
+// next attempt starts from the base branch rather than on top of the closed PR.
+func discardWork(cfg Config, j *Job) error {
+	if _, err := os.Stat(cfg.Directory); err != nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	g := checkout{cfg}
+	work := g.workdir(j)
+	if _, err := os.Stat(work); err == nil {
+		if _, err := g.git(ctx, "worktree", "remove", "--force", "--", work); err != nil {
+			return fmt.Errorf("discard superseded worktree: %w", err)
+		}
+	}
+	_, _ = g.git(ctx, "worktree", "prune")
+	if _, err := g.git(ctx, "show-ref", "--verify", "--quiet", "refs/heads/"+j.Branch); err == nil {
+		if _, err := g.git(ctx, "branch", "-D", j.Branch); err != nil {
+			return fmt.Errorf("discard superseded branch: %w", err)
+		}
+	}
+	return nil
+}
+
 func Retry(cfg Config) error {
 	unlock, err := lockConfig(cfg)
 	if err != nil {

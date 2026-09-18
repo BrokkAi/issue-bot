@@ -32,7 +32,7 @@ func workerCommand(ctx context.Context, args []string, version string) error {
 	}
 	return worker.Serve(ctx, *socket, worker.Initialize{
 		Protocol: worker.ProtocolVersion, MinimumProtocol: worker.MinimumProtocol,
-		Bot: "issue-bot", Version: version, Capabilities: []string{"run", "progress", "issue-result", "exact-issue"},
+		Bot: "issue-bot", Version: version, Capabilities: []string{"run", "progress", "issue-result", "exact-issue", "requeue"},
 	}, func(ctx context.Context, request worker.Request, progress func(worker.Progress)) (worker.Result, error) {
 		cfg := bot.DefaultConfig()
 		cfg.Remote = request.Remote
@@ -45,6 +45,14 @@ func workerCommand(ctx context.Context, args []string, version string) error {
 		cfg.Draft = false
 		cfg.Verify = request.Verify
 		cfg.Issue = request.Issue
+		if request.SupersededPR > 0 {
+			if request.Issue < 1 {
+				return worker.Result{}, fmt.Errorf("requeue requires an exact issue")
+			}
+			if err := bot.Requeue(cfg, request.SupersededPR); err != nil {
+				return worker.Result{}, fmt.Errorf("requeue issue #%d: %w", request.Issue, err)
+			}
+		}
 		ctx = bot.WithProgress(ctx, func(p bot.Progress) {
 			progress(worker.Progress{Phase: p.Phase, Task: p.Task})
 		})

@@ -177,7 +177,7 @@ func (e engine) step(ctx context.Context, s *State) (bool, error) {
 			}
 			continue
 		}
-		linked, err := e.source.linkedPull(ctx, i.Number)
+		linked, err := e.source.linkedPull(ctx, i.Number, j.Superseded)
 		if err != nil {
 			return false, err
 		}
@@ -306,7 +306,7 @@ func (e engine) readyToPublish(ctx context.Context, j *Job) error {
 	if err := e.lease.refresh(ctx, false); err != nil {
 		return err
 	}
-	linked, err := e.source.linkedPull(ctx, j.Issue.Number)
+	linked, err := e.source.linkedPull(ctx, j.Issue.Number, j.Superseded)
 	if err != nil {
 		return err
 	}

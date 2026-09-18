@@ -162,7 +162,9 @@ func (g checkout) prepare(ctx context.Context, j *Job) (checkout, error) {
 		return work, err
 	}
 	base := j.Base
-	if remote != "" {
+	// A requeued issue starts over from the base branch: the remote branch, if
+	// Town has not deleted it yet, only holds the superseded pull request.
+	if remote != "" && !(len(j.Superseded) > 0 && j.Tries == 0) {
 		if _, err := g.git(ctx, "fetch", "origin", "refs/heads/"+j.Branch+":refs/remotes/origin/"+j.Branch); err != nil {
 			return work, err
 		}

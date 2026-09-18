@@ -46,7 +46,7 @@ type PullRequest struct {
 }
 type issueSource interface {
 	commentSource
-	linkedPull(context.Context, int) (*LinkedPull, error)
+	linkedPull(context.Context, int, []int) (*LinkedPull, error)
 	issues(context.Context) ([]Issue, error)
 	issue(context.Context, int) (Issue, error)
 	pull(context.Context, *Job) (*PullRequest, error)
@@ -110,6 +110,13 @@ func (g githubClient) pull(ctx context.Context, j *Job) (*PullRequest, error) {
 	if err := g.api(ctx, g.path("/pulls?")+q.Encode(), &prs); err != nil {
 		return nil, err
 	}
+	kept := prs[:0]
+	for _, p := range prs {
+		if !j.superseded(p.Number) {
+			kept = append(kept, p)
+		}
+	}
+	prs = kept
 	if len(prs) == 0 {
 		return nil, nil
 	}

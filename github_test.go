@@ -185,7 +185,7 @@ func TestLinkedPRLookupIncludesTimelineAndManualLinks(t *testing.T) {
 	for _, mode := range []string{"linked", "linked-direct", "linked-error"} {
 		t.Run(mode, func(t *testing.T) {
 			g := coordinationClient(t, mode)
-			p, err := g.linkedPull(context.Background(), 7)
+			p, err := g.linkedPull(context.Background(), 7, nil)
 			if mode == "linked-error" {
 				if err == nil {
 					t.Fatal("GraphQL errors ignored")

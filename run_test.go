@@ -68,7 +68,12 @@ func (f *fakeSource) issue(_ context.Context, n int) (Issue, error) {
 	return Issue{}, errors.New("missing issue")
 }
 func (f *fakeSource) pull(_ context.Context, j *Job) (*PullRequest, error) {
-	return f.prs[j.Issue.Number], nil
+	// Mirrors githubClient.pull: a superseded PR on the issue branch is not
+	// this job's pull request.
+	if p := f.prs[j.Issue.Number]; p != nil && !j.superseded(p.Number) {
+		return p, nil
+	}
+	return nil, nil
 }
 func (f *fakeSource) create(ctx context.Context, j *Job) (*PullRequest, error) {
 	f.creates++
@@ -366,10 +371,16 @@ func TestLocksAndStateIdentity(t *testing.T) {
 	}
 }
 
-func (f *fakeSource) linkedPull(_ context.Context, n int) (*LinkedPull, error) {
+func (f *fakeSource) linkedPull(_ context.Context, n int, ignore []int) (*LinkedPull, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.links[n], nil
+	linked := f.links[n]
+	for _, number := range ignore {
+		if linked != nil && linked.Number == number {
+			return nil, nil
+		}
+	}
+	return linked, nil
 }
 func (f *fakeSource) comments(_ context.Context, n int) ([]issueComment, error) {
 	f.mu.Lock()
@@ -403,4 +414,47 @@ func (f *fakeSource) editComment(_ context.Context, id int64, body string) (issu
 		}
 	}
 	return issueComment{}, errors.New("comment not found")
+}
+
+// Town closes a pull request whose second review still had blocking findings
+// and asks for a fresh attempt. The closed PR must never count as the issue's
+// existing PR again, whether GitHub reports it by branch or as a linked PR, and
+// the next step must implement the issue from scratch.
+func TestRequeueReplacesAClosedPullRequest(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.e.step(context.Background(), f.s); err != nil {
+		t.Fatal(err)
+	}
+	if f.s.Jobs[1].Status != "submitted" || f.source.creates != 1 {
+		t.Fatalf("first attempt did not submit: %+v", f.s.Jobs[1])
+	}
+	closed := f.source.prs[1]
+	closed.State = "closed"
+	f.source.links[1] = &LinkedPull{Number: closed.Number, URL: closed.URL, State: "CLOSED"}
+	cfg := f.e.config
+	cfg.Issue = 1
+	if err := Requeue(cfg, closed.Number); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := ReadState(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := saved.Jobs[1]
+	if job.Status != "pending" || job.Tries != 0 || job.URL != "" || !job.superseded(closed.Number) {
+		t.Fatalf("requeue did not reset the job: %+v", job)
+	}
+	// The remote branch of the closed PR is gone, as Town deletes it.
+	localGit(t, f.e.config.Directory, "push", "origin", "--delete", job.Branch)
+	f.s = saved
+	f.e.config.Issue = 0
+	if _, err := f.e.step(context.Background(), f.s); err != nil {
+		t.Fatal(err)
+	}
+	if f.s.Jobs[1].Status != "submitted" || f.source.creates != 2 {
+		t.Fatalf("requeued issue was not implemented again: %+v creates=%d", f.s.Jobs[1], f.source.creates)
+	}
+	if err := Requeue(Config{}, closed.Number); err == nil {
+		t.Fatal("requeue accepted without an issue")
+	}
 }

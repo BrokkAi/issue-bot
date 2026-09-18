@@ -52,6 +52,9 @@ type Request struct {
 	PR             int                `json:"pr,omitempty"`
 	BaseSHA        string             `json:"base_sha,omitempty"`
 	HeadSHA        string             `json:"head_sha,omitempty"`
+	// SupersededPR names a pull request Town closed after review. The run
+	// requeues Issue for a fresh attempt before implementing it.
+	SupersededPR int `json:"superseded_pr,omitempty"`
 }
 
 type Progress struct {

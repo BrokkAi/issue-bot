@@ -9,7 +9,9 @@ import (
 )
 
 // LinkedPull can belong to anyone, on any branch or fork. A closed PR also
-// counts: the operator asked for issues that do not already have a PR.
+// counts: the operator asked for issues that do not already have a PR. The one
+// exception is a PR Brokk Town closed after review and asked the bot to replace;
+// the caller names those and they are skipped.
 type LinkedPull struct {
 	Number int    `json:"number"`
 	URL    string `json:"url"`
@@ -19,7 +21,7 @@ type LinkedPull struct {
 const linkedQuery = `query($owner:String!,$repo:String!,$number:Int!,$cursor:String) {
  repository(owner:$owner,name:$repo) {
   issue(number:$number) {
-   closedByPullRequestsReferences(first:1,includeClosedPrs:true) { nodes { number url state } }
+   closedByPullRequestsReferences(first:20,includeClosedPrs:true) { nodes { number url state } }
    timelineItems(first:100,after:$cursor,itemTypes:[CROSS_REFERENCED_EVENT,CONNECTED_EVENT]) {
     nodes {
      ... on CrossReferencedEvent { source { ... on PullRequest { number url state } } }
@@ -31,7 +33,11 @@ const linkedQuery = `query($owner:String!,$repo:String!,$number:Int!,$cursor:Str
  }
 }`
 
-func (g githubClient) linkedPull(ctx context.Context, n int) (*LinkedPull, error) {
+func (g githubClient) linkedPull(ctx context.Context, n int, ignore []int) (*LinkedPull, error) {
+	skip := map[int]bool{}
+	for _, number := range ignore {
+		skip[number] = true
+	}
 	parts := strings.SplitN(g.config.GitHubRepo(), "/", 2)
 	cursor := ""
 	for page := 0; page < 1000; page++ {
@@ -71,13 +77,13 @@ func (g githubClient) linkedPull(ctx context.Context, n int) (*LinkedPull, error
 		}
 		i := reply.Data.Repository.Issue
 		for _, p := range i.ClosedBy.Nodes {
-			if p.Number > 0 && p.URL != "" {
+			if p.Number > 0 && p.URL != "" && !skip[p.Number] {
 				return &p, nil
 			}
 		}
 		for _, node := range i.Timeline.Nodes {
 			for _, p := range []*LinkedPull{node.Source, node.Subject} {
-				if p != nil && p.Number > 0 && p.URL != "" {
+				if p != nil && p.Number > 0 && p.URL != "" && !skip[p.Number] {
 					return p, nil
 				}
 			}

@@ -190,6 +190,13 @@ Town may include an `issue` number in a run request to constrain the operation t
 one explicitly admitted issue. The worker advertises the `exact-issue` capability;
 an omitted issue retains repository-wide behavior for existing clients.
 
+Town may also name a `superseded_pr` with the issue: a pull request Town closed
+after review. The worker advertises the `requeue` capability and, before
+implementing, resets the issue's saved job, discards the old worktree and
+branch, and records the closed PR so it never counts as the issue's existing
+pull request again (`bib` otherwise treats any linked PR, open or closed, as
+"already has a PR").
+
 - `GET /v1/initialize` returns the protocol range, bot identity, release version,
   and capabilities. Town requires `issue-result` as well as common `run` and
   `progress` capabilities.
